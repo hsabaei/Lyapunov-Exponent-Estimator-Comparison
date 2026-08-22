@@ -1,5 +1,4 @@
 import csv
-import time
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +8,9 @@ from src.systems import (
     linear_true_lyapunov,
 )
 
-from src.estimators.proposed import proposed_le_estimator
+from src.estimators.proposed import (
+    rolling_proposed_le_estimator,
+)
 
 
 # ============================================================
@@ -39,16 +40,23 @@ K_VALUES = [10, 20, 40]
 def run_experiment():
 
     output_dir = Path("results/tables")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    output_file = output_dir / "experiment1_linear_proposed.csv"
+    detailed_file = (
+        output_dir
+        / "experiment1_linear_rolling.csv"
+    )
 
     rows = []
 
     print()
-    print("=" * 95)
-    print("Experiment 1: Linear Fixed-Point Contraction")
-    print("=" * 95)
+    print("=" * 100)
+    print("Experiment 1: Rolling Linear Fixed-Point Estimation")
+    print("=" * 100)
+
     print(f"N  = {N}")
     print(f"L  = {L}")
     print(f"x0 = {X0}")
@@ -58,11 +66,11 @@ def run_experiment():
     header = (
         f"{'a':>7} "
         f"{'K':>5} "
+        f"{'windows':>8} "
         f"{'True LE':>14} "
-        f"{'Estimated LE':>14} "
-        f"{'Abs. Error':>14} "
-        f"{'Time (s)':>12} "
-        f"{'Valid':>7}"
+        f"{'First LE':>14} "
+        f"{'Last LE':>14} "
+        f"{'Last error':>14}"
     )
 
     print(header)
@@ -70,8 +78,6 @@ def run_experiment():
 
     for a in A_VALUES:
 
-        # Generate one common trajectory for this value of a.
-        # The same trajectory is then evaluated at every K.
         x = generate_linear_trajectory(
             a=a,
             L=L,
@@ -79,59 +85,116 @@ def run_experiment():
             N=N,
         )
 
-        lambda_true = linear_true_lyapunov(a)
+        lambda_true = (
+            linear_true_lyapunov(a)
+        )
 
         for K in K_VALUES:
 
-            result = proposed_le_estimator(
-                x=x,
-                K=K,
+            results = (
+                rolling_proposed_le_estimator(
+                    x=x,
+                    K=K,
+                )
             )
 
-            if result["valid"]:
-                lambda_hat = result["lambda_hat"]
+            valid_results = [
+                result
+                for result in results
+                if result["valid"]
+            ]
 
-                absolute_error = abs(
-                    lambda_hat - lambda_true
+            for result in results:
+
+                if result["valid"]:
+                    absolute_error = abs(
+                        result["lambda_hat"]
+                        - lambda_true
+                    )
+                else:
+                    absolute_error = np.nan
+
+                rows.append({
+                    "a": a,
+                    "K": K,
+                    "N": N,
+                    "L": L,
+                    "x0": X0,
+
+                    "end_index":
+                        result["end_index"],
+
+                    "window_start":
+                        result["window_start"],
+
+                    "window_end":
+                        result["window_end"],
+
+                    "boundary_index":
+                        result["boundary_index"],
+
+                    "L_hat_index":
+                        result["L_hat_index"],
+
+                    "L_hat":
+                        result["L_hat"],
+
+                    "lambda_true":
+                        lambda_true,
+
+                    "lambda_hat":
+                        result["lambda_hat"],
+
+                    "absolute_error":
+                        absolute_error,
+
+                    "ell_err_hat":
+                        result["ell_err_hat"],
+
+                    "id_fie_hat":
+                        result["id_fie_hat"],
+
+                    "runtime_sec":
+                        result["runtime_sec"],
+
+                    "valid":
+                        result["valid"],
+
+                    "failure_reason":
+                        result["failure_reason"],
+                })
+
+            if len(valid_results) > 0:
+
+                first = valid_results[0]
+                last = valid_results[-1]
+
+                last_error = abs(
+                    last["lambda_hat"]
+                    - lambda_true
+                )
+
+                print(
+                    f"{a:7.2f} "
+                    f"{K:5d} "
+                    f"{len(valid_results):8d} "
+                    f"{lambda_true:14.8f} "
+                    f"{first['lambda_hat']:14.8f} "
+                    f"{last['lambda_hat']:14.8f} "
+                    f"{last_error:14.8e}"
                 )
 
             else:
-                lambda_hat = np.nan
-                absolute_error = np.nan
 
-            row = {
-                "a": a,
-                "K": K,
-                "N": N,
-                "L": L,
-                "x0": X0,
-                "lambda_true": lambda_true,
-                "lambda_hat": lambda_hat,
-                "absolute_error": absolute_error,
-                "runtime_sec": result["runtime_sec"],
-                "ell_err_hat": result["ell_err_hat"],
-                "id_fie_hat": result["id_fie_hat"],
-                "L_hat": result["L_hat"],
-                "t0": result["t0"],
-                "valid": result["valid"],
-                "failure_reason": result["failure_reason"],
-            }
-
-            rows.append(row)
-
-            print(
-                f"{a:7.2f} "
-                f"{K:5d} "
-                f"{lambda_true:14.8f} "
-                f"{lambda_hat:14.8f} "
-                f"{absolute_error:14.8e} "
-                f"{result['runtime_sec']:12.4e} "
-                f"{str(result['valid']):>7}"
-            )
-
-    # --------------------------------------------------------
-    # Save complete results
-    # --------------------------------------------------------
+                print(
+                    f"{a:7.2f} "
+                    f"{K:5d} "
+                    f"{0:8d} "
+                    f"{lambda_true:14.8f} "
+                    f"{'nan':>14} "
+                    f"{'nan':>14} "
+                    f"{'nan':>14}"
+                )
 
     fieldnames = [
         "a",
@@ -139,20 +202,24 @@ def run_experiment():
         "N",
         "L",
         "x0",
+        "end_index",
+        "window_start",
+        "window_end",
+        "boundary_index",
+        "L_hat_index",
+        "L_hat",
         "lambda_true",
         "lambda_hat",
         "absolute_error",
-        "runtime_sec",
         "ell_err_hat",
         "id_fie_hat",
-        "L_hat",
-        "t0",
+        "runtime_sec",
         "valid",
         "failure_reason",
     ]
 
     with open(
-        output_file,
+        detailed_file,
         "w",
         newline="",
         encoding="utf-8",
@@ -167,10 +234,16 @@ def run_experiment():
         writer.writerows(rows)
 
     print()
-    print("=" * 95)
-    print(f"Results saved to: {output_file}")
-    print(f"Number of cases:   {len(rows)}")
-    print("=" * 95)
+    print("=" * 100)
+    print(
+        f"Rolling results saved to: "
+        f"{detailed_file}"
+    )
+    print(
+        f"Total rolling estimates: "
+        f"{len(rows)}"
+    )
+    print("=" * 100)
     print()
 
 
