@@ -1,352 +1,791 @@
 import time
+
 import numpy as np
+import mpmath as mp
 
 
-def proposed_le_estimator(x, K, end_index=None):
-    """
-    Rolling proposed Lyapunov-exponent estimator.
+# ============================================================
+# Hill estimator -- float64
+# ============================================================
 
-    At estimation endpoint n, the estimator uses
+def _hill_estimator_float(V):
 
-        boundary:       x_{n-K-1}
-        K-step window:  x_{n-K}, ..., x_n
-        limit estimate: L_hat = x_{n+1}
+    V = np.asarray(
+        V,
+        dtype=float,
+    )
 
-    The K-step window contains K iterations and K+1 states.
+    V = V[
+        np.isfinite(V)
+        & (V > 0.0)
+    ]
 
-    Parameters
-    ----------
-    x : array_like
-        Observed scalar trajectory.
+    k = V.size
 
-    K : int
-        Number of iterations in the estimation window.
+    if k < 2:
+        return np.nan
 
-    end_index : int or None
-        Index n of the final state in the K-step window.
+    w = np.max(V)
 
-        If None, the latest possible estimate is returned:
-            n = len(x) - 2,
-        so that x_{n+1} is available as L_hat.
+    if (
+        not np.isfinite(w)
+        or w <= 0.0
+    ):
+        return np.nan
 
-    Returns
-    -------
-    result : dict
-        lambda_hat
-        ell_err_hat
-        id_fie_hat
-        L_hat
-        end_index
-        window_start
-        window_end
-        boundary_index
-        L_hat_index
-        K
-        runtime_sec
-        valid
-        failure_reason
-    """
+    denominator = np.sum(
+        np.log(V / w)
+    )
+
+    if (
+        not np.isfinite(denominator)
+        or denominator == 0.0
+    ):
+        return np.nan
+
+    hill = (
+        -k / denominator
+    )
+
+    if (
+        not np.isfinite(hill)
+        or hill <= 0.0
+    ):
+        return np.nan
+
+    return float(hill)
+
+
+# ============================================================
+# Hill estimator -- arbitrary precision
+# ============================================================
+
+def _hill_estimator_mp(V):
+
+    values = [
+        v
+        for v in V
+        if mp.isfinite(v)
+        and v > 0
+    ]
+
+    k = len(values)
+
+    if k < 2:
+        return mp.nan
+
+    w = max(values)
+
+    if (
+        not mp.isfinite(w)
+        or w <= 0
+    ):
+        return mp.nan
+
+    log_ratios = [
+        mp.log(v / w)
+        for v in values
+    ]
+
+    denominator = mp.fsum(
+        log_ratios
+    )
+
+    if (
+        not mp.isfinite(denominator)
+        or denominator == 0
+    ):
+        return mp.nan
+
+    hill = (
+        -mp.mpf(k)
+        / denominator
+    )
+
+    if (
+        not mp.isfinite(hill)
+        or hill <= 0
+    ):
+        return mp.nan
+
+    return hill
+
+
+# ============================================================
+# Float64 estimator
+# ============================================================
+
+def _proposed_float(
+    x,
+    K,
+    end_index,
+    limit_method,
+    L_hat_override,
+):
 
     start_time = time.perf_counter()
 
-    x = np.asarray(x, dtype=float)
+    x = np.asarray(
+        x,
+        dtype=float,
+    )
 
-    # --------------------------------------------------
-    # Input checks
-    # --------------------------------------------------
     if x.ndim != 1:
-        raise ValueError("x must be one-dimensional.")
+        raise ValueError(
+            "x must be one-dimensional."
+        )
 
-    if len(x) < 4:
-        raise ValueError("At least four observations are required.")
-
-    if K < 1:
-        raise ValueError("K must be positive.")
-
-    # Latest possible endpoint if not specified
     if end_index is None:
         n = len(x) - 2
     else:
         n = int(end_index)
 
-    # Need x_{n+1} for L_hat
+    if n < K:
+        raise ValueError(
+            f"end_index={n} is too early for K={K}."
+        )
+
     if n + 1 >= len(x):
         raise ValueError(
-            f"x_[n+1] is unavailable for end_index={n}."
+            "x[n+1] is unavailable."
         )
 
-    # Start of K-step estimation window
     t0 = n - K
 
-    # FIE requires one observation before the window
-    if t0 < 1:
-        raise ValueError(
-            "FIE requires one observation before the K-step window. "
-            f"For K={K}, end_index must satisfy end_index >= {K + 1}."
-        )
-
-    boundary_index = t0 - 1
-    L_hat_index = n + 1
-
-    # Each rolling estimate uses its own next observation
-    L_hat = x[L_hat_index]
-
-    tiny = np.finfo(float).tiny
+    L_hat = np.nan
+    used_limit_method = limit_method
 
     def failure(
         reason,
         ell_err_hat=np.nan,
         id_fie_hat=np.nan,
     ):
+
         return {
             "lambda_hat": np.nan,
             "ell_err_hat": ell_err_hat,
             "id_fie_hat": id_fie_hat,
-            "L_hat": float(L_hat),
+            "L_hat": L_hat,
+            "limit_method": used_limit_method,
             "end_index": int(n),
             "window_start": int(t0),
             "window_end": int(n),
-            "boundary_index": int(boundary_index),
-            "L_hat_index": int(L_hat_index),
+            "latest_observation_index": int(n + 1),
             "K": int(K),
-            "runtime_sec": time.perf_counter() - start_time,
+            "runtime_sec":
+                time.perf_counter() - start_time,
             "valid": False,
             "failure_reason": reason,
         }
 
-    # ==================================================
-    # 1. Error-decay component
-    # ==================================================
-    #
-    # ell_err_hat
-    # =
-    # (1/K) sum_{j=1}^K
-    # (1/j) log(
-    #   |x_{t0+j} - L_hat|
-    #   /
-    #   |x_{t0} - L_hat|
-    # )
-    # ==================================================
+    # ========================================================
+    # Limit estimate
+    # ========================================================
 
-    r0 = abs(x[t0] - L_hat)
+    if L_hat_override is not None:
 
-    if (not np.isfinite(r0)) or r0 <= tiny:
+        L_hat = float(
+            L_hat_override
+        )
+
+        used_limit_method = "oracle"
+
+    elif limit_method == "next":
+
+        L_hat = float(
+            x[n + 1]
+        )
+
+    elif limit_method == "aitken":
+
+        denominator = (
+            x[n + 1]
+            - 2.0 * x[n]
+            + x[n - 1]
+        )
+
+        if denominator == 0.0:
+            return failure(
+                "Aitken denominator is zero."
+            )
+
+        L_hat = (
+            x[n - 1]
+            -
+            (
+                (x[n] - x[n - 1]) ** 2
+                / denominator
+            )
+        )
+
+    else:
+
+        raise ValueError(
+            "limit_method must be "
+            "'next' or 'aitken'."
+        )
+
+    if not np.isfinite(L_hat):
         return failure(
-            "Initial window distance from L_hat is zero or nonfinite."
+            "Limit estimate is nonfinite."
+        )
+
+    # ========================================================
+    # Error component
+    # ========================================================
+
+    r0 = abs(
+        x[t0] - L_hat
+    )
+
+    if (
+        not np.isfinite(r0)
+        or r0 == 0.0
+    ):
+        return failure(
+            "Initial residual is zero or nonfinite."
         )
 
     ell_values = []
 
     for j in range(1, K + 1):
 
-        rj = abs(x[t0 + j] - L_hat)
-
-        if (not np.isfinite(rj)) or rj <= tiny:
-            return failure(
-                f"Window distance is zero or nonfinite at j={j}."
-            )
-
-        ell_j = np.log(rj / r0) / j
-
-        if not np.isfinite(ell_j):
-            return failure(
-                f"Error-decay term is nonfinite at j={j}."
-            )
-
-        ell_values.append(ell_j)
-
-    ell_err_hat = float(np.mean(ell_values))
-
-    # ==================================================
-    # 2. FIE estimate
-    # ==================================================
-    #
-    # numerator:
-    #
-    # sum_{i=1}^K log |
-    #   (x_{t0+i} - L_hat)
-    #   /
-    #   (x_{t0} - L_hat)
-    # |
-    #
-    # denominator:
-    #
-    # sum_{i=1}^K log |
-    #   (x_{t0-1+i} - L_hat)
-    #   /
-    #   (x_{t0-1} - L_hat)
-    # |
-    #
-    # ==================================================
-
-    numerator_base = abs(
-        x[t0] - L_hat
-    )
-
-    denominator_base = abs(
-        x[t0 - 1] - L_hat
-    )
-
-    if (
-        not np.isfinite(numerator_base)
-        or numerator_base <= tiny
-    ):
-        return failure(
-            "FIE numerator base is zero or nonfinite.",
-            ell_err_hat=ell_err_hat,
-        )
-
-    if (
-        not np.isfinite(denominator_base)
-        or denominator_base <= tiny
-    ):
-        return failure(
-            "FIE denominator base is zero or nonfinite.",
-            ell_err_hat=ell_err_hat,
-        )
-
-    numerator = 0.0
-    denominator = 0.0
-
-    for i in range(1, K + 1):
-
-        numerator_distance = abs(
-            x[t0 + i] - L_hat
-        )
-
-        denominator_distance = abs(
-            x[t0 - 1 + i] - L_hat
+        rj = abs(
+            x[t0 + j]
+            - L_hat
         )
 
         if (
-            not np.isfinite(numerator_distance)
-            or numerator_distance <= tiny
+            not np.isfinite(rj)
+            or rj == 0.0
         ):
             return failure(
-                f"FIE numerator distance invalid at i={i}.",
-                ell_err_hat=ell_err_hat,
+                f"Residual invalid at j={j}."
             )
 
-        if (
-            not np.isfinite(denominator_distance)
-            or denominator_distance <= tiny
-        ):
-            return failure(
-                f"FIE denominator distance invalid at i={i}.",
-                ell_err_hat=ell_err_hat,
-            )
-
-        numerator += np.log(
-            numerator_distance / numerator_base
+        ell_j = (
+            np.log(rj / r0)
+            / j
         )
 
-        denominator += np.log(
-            denominator_distance / denominator_base
+        ell_values.append(
+            ell_j
         )
 
-    if not np.isfinite(numerator):
+    ell_err_hat = float(
+        np.mean(ell_values)
+    )
+
+    # ========================================================
+    # FIE
+    # ========================================================
+
+    R = np.abs(
+        x[t0:n]
+        - L_hat
+    )
+
+    FR = np.abs(
+        x[t0 + 1:n + 1]
+        - L_hat
+    )
+
+    hill_R = (
+        _hill_estimator_float(R)
+    )
+
+    hill_FR = (
+        _hill_estimator_float(FR)
+    )
+
+    if not np.isfinite(hill_R):
         return failure(
-            "FIE numerator is nonfinite.",
-            ell_err_hat=ell_err_hat,
+            "Hill(R) is invalid.",
+            ell_err_hat,
         )
 
-    if not np.isfinite(denominator):
+    if not np.isfinite(hill_FR):
         return failure(
-            "FIE denominator is nonfinite.",
-            ell_err_hat=ell_err_hat,
+            "Hill(FR) is invalid.",
+            ell_err_hat,
         )
 
-    if denominator == 0.0:
-        return failure(
-            "FIE denominator is zero.",
-            ell_err_hat=ell_err_hat,
-        )
-
-    id_fie_hat = float(
-        numerator / denominator
+    id_fie_hat = (
+        hill_R / hill_FR
     )
 
     if (
         not np.isfinite(id_fie_hat)
-        or id_fie_hat == 0.0
+        or id_fie_hat <= 0
     ):
         return failure(
-            "FIE estimate is zero or nonfinite.",
-            ell_err_hat=ell_err_hat,
-            id_fie_hat=id_fie_hat,
+            "FIE estimate is invalid.",
+            ell_err_hat,
+            id_fie_hat,
         )
 
-    # ==================================================
-    # 3. Final LE estimate
-    # ==================================================
+    # ========================================================
+    # Final LE
+    # ========================================================
 
     lambda_hat = (
         ell_err_hat
-        + np.log(abs(id_fie_hat))
+        + np.log(id_fie_hat)
     )
 
-    if not np.isfinite(lambda_hat):
-        return failure(
-            "Final Lyapunov estimate is nonfinite.",
-            ell_err_hat=ell_err_hat,
-            id_fie_hat=id_fie_hat,
-        )
-
     return {
-        "lambda_hat": float(lambda_hat),
-        "ell_err_hat": float(ell_err_hat),
-        "id_fie_hat": float(id_fie_hat),
-        "L_hat": float(L_hat),
-        "end_index": int(n),
-        "window_start": int(t0),
-        "window_end": int(n),
-        "boundary_index": int(boundary_index),
-        "L_hat_index": int(L_hat_index),
-        "K": int(K),
-        "runtime_sec": float(
-            time.perf_counter() - start_time
-        ),
-        "valid": True,
-        "failure_reason": "",
+        "lambda_hat":
+            float(lambda_hat),
+
+        "ell_err_hat":
+            float(ell_err_hat),
+
+        "id_fie_hat":
+            float(id_fie_hat),
+
+        "L_hat":
+            float(L_hat),
+
+        "limit_method":
+            used_limit_method,
+
+        "end_index":
+            int(n),
+
+        "window_start":
+            int(t0),
+
+        "window_end":
+            int(n),
+
+        "latest_observation_index":
+            int(n + 1),
+
+        "K":
+            int(K),
+
+        "runtime_sec":
+            float(
+                time.perf_counter()
+                - start_time
+            ),
+
+        "valid":
+            True,
+
+        "failure_reason":
+            "",
     }
 
 
-def rolling_proposed_le_estimator(x, K):
+# ============================================================
+# High-precision estimator
+# ============================================================
+
+def _proposed_mp(
+    x,
+    K,
+    end_index,
+    limit_method,
+    L_hat_override,
+):
+
+    start_time = time.perf_counter()
+
+    # IMPORTANT:
+    # Do not convert through float.
+    x = [
+        value
+        if isinstance(value, mp.mpf)
+        else mp.mpf(str(value))
+        for value in x
+    ]
+
+    if end_index is None:
+        n = len(x) - 2
+    else:
+        n = int(end_index)
+
+    if n < K:
+        raise ValueError(
+            f"end_index={n} is too early for K={K}."
+        )
+
+    if n + 1 >= len(x):
+        raise ValueError(
+            "x[n+1] is unavailable."
+        )
+
+    t0 = n - K
+
+    L_hat = mp.nan
+    used_limit_method = limit_method
+
+    def failure(
+        reason,
+        ell_err_hat=mp.nan,
+        id_fie_hat=mp.nan,
+    ):
+
+        return {
+            "lambda_hat": mp.nan,
+            "ell_err_hat": ell_err_hat,
+            "id_fie_hat": id_fie_hat,
+            "L_hat": L_hat,
+            "limit_method": used_limit_method,
+            "end_index": int(n),
+            "window_start": int(t0),
+            "window_end": int(n),
+            "latest_observation_index": int(n + 1),
+            "K": int(K),
+            "runtime_sec":
+                time.perf_counter() - start_time,
+            "valid": False,
+            "failure_reason": reason,
+        }
+
+    # ========================================================
+    # Limit estimate
+    # ========================================================
+
+    if L_hat_override is not None:
+
+        L_hat = (
+            L_hat_override
+            if isinstance(
+                L_hat_override,
+                mp.mpf,
+            )
+            else mp.mpf(
+                str(L_hat_override)
+            )
+        )
+
+        used_limit_method = "oracle"
+
+    elif limit_method == "next":
+
+        L_hat = x[n + 1]
+
+    elif limit_method == "aitken":
+
+        denominator = (
+            x[n + 1]
+            - 2 * x[n]
+            + x[n - 1]
+        )
+
+        if denominator == 0:
+            return failure(
+                "Aitken denominator is zero."
+            )
+
+        L_hat = (
+            x[n - 1]
+            -
+            (
+                (x[n] - x[n - 1]) ** 2
+                / denominator
+            )
+        )
+
+    else:
+
+        raise ValueError(
+            "limit_method must be "
+            "'next' or 'aitken'."
+        )
+
+    if not mp.isfinite(L_hat):
+        return failure(
+            "Limit estimate is nonfinite."
+        )
+
+    # ========================================================
+    # Error-decay component
+    # ========================================================
+
+    r0 = mp.fabs(
+        x[t0] - L_hat
+    )
+
+    if (
+        not mp.isfinite(r0)
+        or r0 == 0
+    ):
+        return failure(
+            "Initial residual is zero or nonfinite."
+        )
+
+    ell_values = []
+
+    for j in range(1, K + 1):
+
+        rj = mp.fabs(
+            x[t0 + j]
+            - L_hat
+        )
+
+        if (
+            not mp.isfinite(rj)
+            or rj == 0
+        ):
+            return failure(
+                f"Residual invalid at j={j}."
+            )
+
+        ell_j = (
+            mp.log(rj / r0)
+            / mp.mpf(j)
+        )
+
+        ell_values.append(
+            ell_j
+        )
+
+    ell_err_hat = (
+        mp.fsum(ell_values)
+        / mp.mpf(K)
+    )
+
+    # ========================================================
+    # FIE component
+    # ========================================================
+
+    R = [
+        mp.fabs(
+            x[i] - L_hat
+        )
+        for i in range(
+            t0,
+            n,
+        )
+    ]
+
+    FR = [
+        mp.fabs(
+            x[i] - L_hat
+        )
+        for i in range(
+            t0 + 1,
+            n + 1,
+        )
+    ]
+
+    if len(R) != K:
+        return failure(
+            "R has incorrect length.",
+            ell_err_hat,
+        )
+
+    if len(FR) != K:
+        return failure(
+            "FR has incorrect length.",
+            ell_err_hat,
+        )
+
+    hill_R = (
+        _hill_estimator_mp(R)
+    )
+
+    hill_FR = (
+        _hill_estimator_mp(FR)
+    )
+
+    if not mp.isfinite(hill_R):
+        return failure(
+            "Hill(R) is invalid.",
+            ell_err_hat,
+        )
+
+    if not mp.isfinite(hill_FR):
+        return failure(
+            "Hill(FR) is invalid.",
+            ell_err_hat,
+        )
+
+    id_fie_hat = (
+        hill_R
+        / hill_FR
+    )
+
+    if (
+        not mp.isfinite(id_fie_hat)
+        or id_fie_hat <= 0
+    ):
+        return failure(
+            "FIE estimate is invalid.",
+            ell_err_hat,
+            id_fie_hat,
+        )
+
+    # ========================================================
+    # Final Lyapunov estimate
+    # ========================================================
+
+    lambda_hat = (
+        ell_err_hat
+        + mp.log(id_fie_hat)
+    )
+
+    if not mp.isfinite(lambda_hat):
+        return failure(
+            "Final LE is nonfinite.",
+            ell_err_hat,
+            id_fie_hat,
+        )
+
+    return {
+        "lambda_hat":
+            lambda_hat,
+
+        "ell_err_hat":
+            ell_err_hat,
+
+        "id_fie_hat":
+            id_fie_hat,
+
+        "L_hat":
+            L_hat,
+
+        "limit_method":
+            used_limit_method,
+
+        "end_index":
+            int(n),
+
+        "window_start":
+            int(t0),
+
+        "window_end":
+            int(n),
+
+        "latest_observation_index":
+            int(n + 1),
+
+        "K":
+            int(K),
+
+        "runtime_sec":
+            float(
+                time.perf_counter()
+                - start_time
+            ),
+
+        "valid":
+            True,
+
+        "failure_reason":
+            "",
+    }
+
+
+# ============================================================
+# Public estimator
+# ============================================================
+
+def proposed_le_estimator(
+    x,
+    K,
+    end_index=None,
+    limit_method="next",
+    L_hat_override=None,
+    numeric_backend="float64",
+):
     """
-    Compute every available rolling K-step LE estimate.
+    Proposed Lyapunov exponent estimator.
 
-    The first possible estimate has
-
-        boundary      = x_0
-        window        = x_1, ..., x_{K+1}
-        L_hat         = x_{K+2}
-
-    because FIE requires one observation before the
-    estimation window.
-
-    The final possible endpoint is len(x)-2.
+    numeric_backend:
+        "float64"
+        "mpmath"
     """
 
-    x = np.asarray(x, dtype=float)
+    if K < 1:
+        raise ValueError(
+            "K must be positive."
+        )
 
-    first_end = K + 1
+    if numeric_backend == "float64":
+
+        return _proposed_float(
+            x=x,
+            K=K,
+            end_index=end_index,
+            limit_method=limit_method,
+            L_hat_override=L_hat_override,
+        )
+
+    if numeric_backend == "mpmath":
+
+        return _proposed_mp(
+            x=x,
+            K=K,
+            end_index=end_index,
+            limit_method=limit_method,
+            L_hat_override=L_hat_override,
+        )
+
+    raise ValueError(
+        "numeric_backend must be "
+        "'float64' or 'mpmath'."
+    )
+
+
+# ============================================================
+# Rolling estimator
+# ============================================================
+
+def rolling_proposed_le_estimator(
+    x,
+    K,
+    limit_method="next",
+    numeric_backend="float64",
+):
+    """
+    Compute all rolling estimates.
+
+    For endpoint n:
+
+        window = x_{n-K}, ..., x_n
+
+    and x_{n+1} is available for the
+    practical limit estimate.
+
+    First endpoint:
+
+        n = K
+
+    Last endpoint:
+
+        n = len(x) - 2
+    """
+
+    first_end = K
     last_end = len(x) - 2
 
     if first_end > last_end:
         raise ValueError(
-            "Trajectory is too short for the requested K."
+            "Trajectory is too short "
+            "for the requested K."
         )
 
     results = []
 
-    for n in range(first_end, last_end + 1):
+    for n in range(
+        first_end,
+        last_end + 1,
+    ):
 
         result = proposed_le_estimator(
             x=x,
             K=K,
             end_index=n,
+            limit_method=limit_method,
+            numeric_backend=numeric_backend,
         )
 
-        results.append(result)
+        results.append(
+            result
+        )
 
     return results
