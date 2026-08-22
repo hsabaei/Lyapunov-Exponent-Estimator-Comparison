@@ -2,40 +2,45 @@ import time
 import numpy as np
 
 
-def proposed_le_estimator(x, K):
+def proposed_le_estimator(x, K, end_index=None):
     """
-    Proposed Lyapunov-exponent estimator based on
+    Rolling proposed Lyapunov-exponent estimator.
 
-        lambda_hat
-        =
-        ell_err_hat
-        +
-        log(|ID_F_star_hat|),
+    At estimation endpoint n, the estimator uses
 
-    where ID_F_star_hat is estimated using FIE.
+        boundary:       x_{n-K-1}
+        K-step window:  x_{n-K}, ..., x_n
+        limit estimate: L_hat = x_{n+1}
+
+    The K-step window contains K iterations and K+1 states.
 
     Parameters
     ----------
     x : array_like
-        Observed trajectory
-
-            x_0, ..., x_N, x_{N+1}.
-
-        Therefore len(x) = N + 2.
+        Observed scalar trajectory.
 
     K : int
-        Tail length.
+        Number of iterations in the estimation window.
+
+    end_index : int or None
+        Index n of the final state in the K-step window.
+
+        If None, the latest possible estimate is returned:
+            n = len(x) - 2,
+        so that x_{n+1} is available as L_hat.
 
     Returns
     -------
     result : dict
-        Dictionary containing
-
         lambda_hat
         ell_err_hat
         id_fie_hat
         L_hat
-        t0
+        end_index
+        window_start
+        window_end
+        boundary_index
+        L_hat_index
         K
         runtime_sec
         valid
@@ -58,34 +63,51 @@ def proposed_le_estimator(x, K):
     if K < 1:
         raise ValueError("K must be positive.")
 
-    # x = x_0, ..., x_N, x_{N+1}
-    N = len(x) - 2
+    # Latest possible endpoint if not specified
+    if end_index is None:
+        n = len(x) - 2
+    else:
+        n = int(end_index)
 
-    # Common tail:
-    # T = {t0, ..., N-1}
-    # K = N - t0
-    t0 = N - K
-
-    # FIE also requires x_{t0-1}
-    if t0 < 1:
+    # Need x_{n+1} for L_hat
+    if n + 1 >= len(x):
         raise ValueError(
-            f"K={K} is too large for N={N}. "
-            "FIE requires t0 >= 1."
+            f"x_[n+1] is unavailable for end_index={n}."
         )
 
-    # Practical limit estimate
-    L_hat = x[N + 1]
+    # Start of K-step estimation window
+    t0 = n - K
 
-    # Numerical safeguard
+    # FIE requires one observation before the window
+    if t0 < 1:
+        raise ValueError(
+            "FIE requires one observation before the K-step window. "
+            f"For K={K}, end_index must satisfy end_index >= {K + 1}."
+        )
+
+    boundary_index = t0 - 1
+    L_hat_index = n + 1
+
+    # Each rolling estimate uses its own next observation
+    L_hat = x[L_hat_index]
+
     tiny = np.finfo(float).tiny
 
-    def failure(reason, ell_err_hat=np.nan, id_fie_hat=np.nan):
+    def failure(
+        reason,
+        ell_err_hat=np.nan,
+        id_fie_hat=np.nan,
+    ):
         return {
             "lambda_hat": np.nan,
             "ell_err_hat": ell_err_hat,
             "id_fie_hat": id_fie_hat,
             "L_hat": float(L_hat),
-            "t0": int(t0),
+            "end_index": int(n),
+            "window_start": int(t0),
+            "window_end": int(n),
+            "boundary_index": int(boundary_index),
+            "L_hat_index": int(L_hat_index),
             "K": int(K),
             "runtime_sec": time.perf_counter() - start_time,
             "valid": False,
@@ -95,15 +117,25 @@ def proposed_le_estimator(x, K):
     # ==================================================
     # 1. Error-decay component
     # ==================================================
+    #
+    # ell_err_hat
+    # =
+    # (1/K) sum_{j=1}^K
+    # (1/j) log(
+    #   |x_{t0+j} - L_hat|
+    #   /
+    #   |x_{t0} - L_hat|
+    # )
+    # ==================================================
 
     r0 = abs(x[t0] - L_hat)
 
     if (not np.isfinite(r0)) or r0 <= tiny:
         return failure(
-            "Initial tail distance from L_hat is numerically zero."
+            "Initial window distance from L_hat is zero or nonfinite."
         )
 
-    ell_err_values = []
+    ell_values = []
 
     for j in range(1, K + 1):
 
@@ -111,41 +143,70 @@ def proposed_le_estimator(x, K):
 
         if (not np.isfinite(rj)) or rj <= tiny:
             return failure(
-                f"Tail distance is numerically invalid at j={j}."
+                f"Window distance is zero or nonfinite at j={j}."
             )
 
         ell_j = np.log(rj / r0) / j
 
         if not np.isfinite(ell_j):
             return failure(
-                f"Error-decay estimate is nonfinite at j={j}."
+                f"Error-decay term is nonfinite at j={j}."
             )
 
-        ell_err_values.append(ell_j)
+        ell_values.append(ell_j)
 
-    ell_err_hat = float(np.mean(ell_err_values))
+    ell_err_hat = float(np.mean(ell_values))
 
     # ==================================================
-    # 2. FIE estimate of limiting LID
+    # 2. FIE estimate
     # ==================================================
+    #
+    # numerator:
+    #
+    # sum_{i=1}^K log |
+    #   (x_{t0+i} - L_hat)
+    #   /
+    #   (x_{t0} - L_hat)
+    # |
+    #
+    # denominator:
+    #
+    # sum_{i=1}^K log |
+    #   (x_{t0-1+i} - L_hat)
+    #   /
+    #   (x_{t0-1} - L_hat)
+    # |
+    #
+    # ==================================================
+
+    numerator_base = abs(
+        x[t0] - L_hat
+    )
+
+    denominator_base = abs(
+        x[t0 - 1] - L_hat
+    )
+
+    if (
+        not np.isfinite(numerator_base)
+        or numerator_base <= tiny
+    ):
+        return failure(
+            "FIE numerator base is zero or nonfinite.",
+            ell_err_hat=ell_err_hat,
+        )
+
+    if (
+        not np.isfinite(denominator_base)
+        or denominator_base <= tiny
+    ):
+        return failure(
+            "FIE denominator base is zero or nonfinite.",
+            ell_err_hat=ell_err_hat,
+        )
 
     numerator = 0.0
     denominator = 0.0
-
-    numerator_base = abs(x[t0] - L_hat)
-    denominator_base = abs(x[t0 - 1] - L_hat)
-
-    if numerator_base <= tiny:
-        return failure(
-            "FIE numerator base is numerically zero.",
-            ell_err_hat=ell_err_hat,
-        )
-
-    if denominator_base <= tiny:
-        return failure(
-            "FIE denominator base is numerically zero.",
-            ell_err_hat=ell_err_hat,
-        )
 
     for i in range(1, K + 1):
 
@@ -157,13 +218,19 @@ def proposed_le_estimator(x, K):
             x[t0 - 1 + i] - L_hat
         )
 
-        if numerator_distance <= tiny:
+        if (
+            not np.isfinite(numerator_distance)
+            or numerator_distance <= tiny
+        ):
             return failure(
                 f"FIE numerator distance invalid at i={i}.",
                 ell_err_hat=ell_err_hat,
             )
 
-        if denominator_distance <= tiny:
+        if (
+            not np.isfinite(denominator_distance)
+            or denominator_distance <= tiny
+        ):
             return failure(
                 f"FIE denominator distance invalid at i={i}.",
                 ell_err_hat=ell_err_hat,
@@ -191,28 +258,26 @@ def proposed_le_estimator(x, K):
 
     if denominator == 0.0:
         return failure(
-            "FIE denominator is numerically zero.",
+            "FIE denominator is zero.",
             ell_err_hat=ell_err_hat,
         )
 
-    id_fie_hat = float(numerator / denominator)
+    id_fie_hat = float(
+        numerator / denominator
+    )
 
-    if not np.isfinite(id_fie_hat):
+    if (
+        not np.isfinite(id_fie_hat)
+        or id_fie_hat == 0.0
+    ):
         return failure(
-            "FIE estimate is nonfinite.",
-            ell_err_hat=ell_err_hat,
-            id_fie_hat=id_fie_hat,
-        )
-
-    if abs(id_fie_hat) <= np.finfo(float).tiny:
-        return failure(
-            "FIE estimate is numerically zero.",
+            "FIE estimate is zero or nonfinite.",
             ell_err_hat=ell_err_hat,
             id_fie_hat=id_fie_hat,
         )
 
     # ==================================================
-    # 3. Final Lyapunov estimate
+    # 3. Final LE estimate
     # ==================================================
 
     lambda_hat = (
@@ -227,16 +292,61 @@ def proposed_le_estimator(x, K):
             id_fie_hat=id_fie_hat,
         )
 
-    runtime = time.perf_counter() - start_time
-
     return {
         "lambda_hat": float(lambda_hat),
         "ell_err_hat": float(ell_err_hat),
         "id_fie_hat": float(id_fie_hat),
         "L_hat": float(L_hat),
-        "t0": int(t0),
+        "end_index": int(n),
+        "window_start": int(t0),
+        "window_end": int(n),
+        "boundary_index": int(boundary_index),
+        "L_hat_index": int(L_hat_index),
         "K": int(K),
-        "runtime_sec": float(runtime),
+        "runtime_sec": float(
+            time.perf_counter() - start_time
+        ),
         "valid": True,
         "failure_reason": "",
     }
+
+
+def rolling_proposed_le_estimator(x, K):
+    """
+    Compute every available rolling K-step LE estimate.
+
+    The first possible estimate has
+
+        boundary      = x_0
+        window        = x_1, ..., x_{K+1}
+        L_hat         = x_{K+2}
+
+    because FIE requires one observation before the
+    estimation window.
+
+    The final possible endpoint is len(x)-2.
+    """
+
+    x = np.asarray(x, dtype=float)
+
+    first_end = K + 1
+    last_end = len(x) - 2
+
+    if first_end > last_end:
+        raise ValueError(
+            "Trajectory is too short for the requested K."
+        )
+
+    results = []
+
+    for n in range(first_end, last_end + 1):
+
+        result = proposed_le_estimator(
+            x=x,
+            K=K,
+            end_index=n,
+        )
+
+        results.append(result)
+
+    return results
