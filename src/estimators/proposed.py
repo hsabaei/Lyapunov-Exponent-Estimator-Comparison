@@ -77,8 +77,7 @@ def proposed_le_estimator(x, K):
     L_hat = x[N + 1]
 
     # Numerical safeguard
-    scale = max(1.0, float(np.max(np.abs(x))))
-    tol = 100.0 * np.finfo(float).eps * scale
+    tiny = np.finfo(float).tiny
 
     def failure(reason, ell_err_hat=np.nan, id_fie_hat=np.nan):
         return {
@@ -99,7 +98,7 @@ def proposed_le_estimator(x, K):
 
     r0 = abs(x[t0] - L_hat)
 
-    if (not np.isfinite(r0)) or r0 <= tol:
+    if (not np.isfinite(r0)) or r0 <= tiny:
         return failure(
             "Initial tail distance from L_hat is numerically zero."
         )
@@ -110,7 +109,7 @@ def proposed_le_estimator(x, K):
 
         rj = abs(x[t0 + j] - L_hat)
 
-        if (not np.isfinite(rj)) or rj <= tol:
+        if (not np.isfinite(rj)) or rj <= tiny:
             return failure(
                 f"Tail distance is numerically invalid at j={j}."
             )
@@ -136,13 +135,13 @@ def proposed_le_estimator(x, K):
     numerator_base = abs(x[t0] - L_hat)
     denominator_base = abs(x[t0 - 1] - L_hat)
 
-    if numerator_base <= tol:
+    if numerator_base <= tiny:
         return failure(
             "FIE numerator base is numerically zero.",
             ell_err_hat=ell_err_hat,
         )
 
-    if denominator_base <= tol:
+    if denominator_base <= tiny:
         return failure(
             "FIE denominator base is numerically zero.",
             ell_err_hat=ell_err_hat,
@@ -158,13 +157,13 @@ def proposed_le_estimator(x, K):
             x[t0 - 1 + i] - L_hat
         )
 
-        if numerator_distance <= tol:
+        if numerator_distance <= tiny:
             return failure(
                 f"FIE numerator distance invalid at i={i}.",
                 ell_err_hat=ell_err_hat,
             )
 
-        if denominator_distance <= tol:
+        if denominator_distance <= tiny:
             return failure(
                 f"FIE denominator distance invalid at i={i}.",
                 ell_err_hat=ell_err_hat,
@@ -190,13 +189,7 @@ def proposed_le_estimator(x, K):
             ell_err_hat=ell_err_hat,
         )
 
-    denominator_tol = (
-        100.0
-        * np.finfo(float).eps
-        * max(1.0, abs(numerator), abs(denominator))
-    )
-
-    if abs(denominator) <= denominator_tol:
+    if denominator == 0.0:
         return failure(
             "FIE denominator is numerically zero.",
             ell_err_hat=ell_err_hat,
