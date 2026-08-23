@@ -96,7 +96,7 @@ LIMIT_METHODS = [
 
 ETA_VALUES = [
     0.0,
-    0.5,
+    0.4,
     0.9,
 ]
 
