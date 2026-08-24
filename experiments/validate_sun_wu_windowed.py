@@ -88,7 +88,9 @@ def main():
                 f"SW={float(result['lambda_hat']):+.8f} "
                 f"error={error:.3e} "
                 f"hidden={result['selected_hidden_nodes']} "
+                f"q={result['selected_width_neighbors']} "
                 f"pairs={result['n_pairs']} "
+                f"cv_mse={result['selected_cv_mse']:.3e} "
                 f"train_mse={result['training_mse']:.3e} "
                 f"valid={result['valid']}"
             )
@@ -138,7 +140,9 @@ def main():
             f"SW={float(result['lambda_hat']):+.8f} "
             f"error={error:.3e} "
             f"hidden={result['selected_hidden_nodes']} "
+            f"q={result['selected_width_neighbors']} "
             f"pairs={result['n_pairs']} "
+            f"cv_mse={result['selected_cv_mse']:.3e} "
             f"train_mse={result['training_mse']:.3e} "
             f"valid={result['valid']}"
         )

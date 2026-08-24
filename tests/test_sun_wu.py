@@ -29,8 +29,41 @@ def test_sun_wu_affine_returns_valid_finite_estimate():
     assert result["valid"]
     assert np.isfinite(result["lambda_hat"])
     assert 2 <= result["selected_hidden_nodes"] <= 20
+    assert 1 <= result["selected_width_neighbors"] < result["selected_hidden_nodes"]
+    assert result["selection_mode"] == "joint_hidden_and_width_cv"
     assert result["n_pairs"] == len(x) - 1
     assert np.all(np.isfinite(result["local_derivatives"]))
+
+
+def test_sun_wu_joint_selection_uses_prediction_cv_only():
+    x = generate_affine_float(
+        a=0.8,
+        L=2.0,
+        x0=1.4,
+        N=20,
+    )
+
+    result = sun_wu_scalar_rbf_le_estimator(
+        x,
+        max_hidden_nodes=8,
+    )
+
+    assert result["valid"]
+
+    selected = (
+        result["selected_hidden_nodes"],
+        result["selected_width_neighbors"],
+    )
+
+    scores = result["cv_mse_by_configuration"]
+
+    assert selected in scores
+    assert np.isclose(
+        result["selected_cv_mse"],
+        min(scores.values()),
+        rtol=0.0,
+        atol=0.0,
+    )
 
 
 def test_sun_wu_analytic_derivative_matches_finite_difference():
