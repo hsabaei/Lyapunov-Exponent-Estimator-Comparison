@@ -1,6 +1,6 @@
 """Scientific checks of the dataset, training trajectory and scalar target."""
 import mpmath as mp
-from experiment3_ml import train_regression, estimate
+from experiments.experiment3_ml import train_regression, estimate
 
 mp.mp.dps = 140
 for sigma in ['0', '0.3']:
