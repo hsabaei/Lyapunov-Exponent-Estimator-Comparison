@@ -1,0 +1,34 @@
+{
+  "steps": 200,
+  "a_values": [
+    "-0.95",
+    "-0.6",
+    "-0.2",
+    "0.2",
+    "0.6",
+    "0.95"
+  ],
+  "windows": [
+    10,
+    20,
+    40,
+    50
+  ],
+  "seeds": [
+    2026,
+    2027
+  ],
+  "samples": 16,
+  "parameters": 8,
+  "sigma": "0.3",
+  "dps": null,
+  "baselines": true,
+  "rolling": false,
+  "output": "results\\experiment3_ml_baselines",
+  "actual_dps": 360,
+  "python": "3.12.2",
+  "numpy": "1.26.4",
+  "mpmath": "1.3.0",
+  "target": "LE of exact autonomous scalar loss map, per gradient update",
+  "timing": "single-call elapsed seconds; not a controlled runtime benchmark"
+}
