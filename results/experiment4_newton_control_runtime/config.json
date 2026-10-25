@@ -1,0 +1,31 @@
+{
+  "experiment": "Newton control runtime benchmark",
+  "function": "(x-2)^2",
+  "newton_update": "(x+2)/2",
+  "lambda_true": -0.6931471805599453,
+  "steps": 200,
+  "windows": [
+    10,
+    20,
+    40,
+    50
+  ],
+  "replicates": 10,
+  "seed": 2026,
+  "trajectory_precision_dps": 220,
+  "estimator_numeric_representation": "float64",
+  "normalization": "(x_i - x_last) / max_j |x_j - x_last|, computed in mpmath before float64 conversion",
+  "warmup": "one unreported call per estimator",
+  "timed_region": "estimator call only",
+  "excluded_from_timing": [
+    "trajectory generation",
+    "reference calculation",
+    "normalization",
+    "float64 conversion",
+    "CSV writing"
+  ],
+  "primary_runtime_statistic": "median",
+  "python": "3.12.2",
+  "numpy": "1.26.4",
+  "mpmath": "1.3.0"
+}
