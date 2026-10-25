@@ -1,0 +1,34 @@
+{
+  "function": "(x-2)^2",
+  "method": "Newton-Raphson",
+  "newton_update": "(x+2)/2",
+  "fixed_point_true": "2",
+  "multiplier_true": "0.5",
+  "lambda_true": "-0.6931471805599453094172321214581765680755001343602552541206800094933936",
+  "paper_initial_point_rule": "7.0e9 +/- 7.0e7",
+  "paper_replicates": 10,
+  "paper_K_values": [
+    10,
+    20
+  ],
+  "extended_K_values": [
+    40,
+    50
+  ],
+  "distance_cutoff": null,
+  "steps": 200,
+  "windows": [
+    10,
+    20,
+    40,
+    50
+  ],
+  "replicates": 10,
+  "seed": 2026,
+  "dps": 220,
+  "proposed_only": false,
+  "python": "3.12.2",
+  "numpy": "1.26.4",
+  "mpmath": "1.3.0",
+  "timing": "single-call elapsed seconds; not a controlled runtime benchmark"
+}
