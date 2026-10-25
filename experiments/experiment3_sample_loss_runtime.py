@@ -149,9 +149,17 @@ def train_with_sample_losses(
         for _ in range(parameters)
     ])
 
-    offset = mp.matrix([
-        mp.mpf(rng.choice([-9, -5, 3, 7])) / 10
+    # Keep the offset numerators as exact integers as well as mpmath values.
+    # This lets us decide exactly whether b_i = x_i^T(w_0-w*) is zero,
+    # without introducing any arbitrary numerical tolerance.
+    offset_numerators = [
+        rng.choice([-9, -5, 3, 7])
         for _ in range(parameters)
+    ]
+
+    offset = mp.matrix([
+        mp.mpf(v) / 10
+        for v in offset_numerators
     ])
 
     w = wstar + offset
@@ -195,7 +203,23 @@ def train_with_sample_losses(
             w = w - learning_rate * gradient
 
     # b_i controls whether sample i contains a convergence signal.
-    b = X * offset
+    #
+    # Because every X entry is +/-1 and every initial offset is an integer
+    # divided by 10, b_i can be tested for exact zero using its integer
+    # numerator. This avoids misclassifying an analytically zero b_i because
+    # of an extremely small arbitrary-precision rounding residue.
+    b_numerators = [
+        sum(
+            signs[j] * H[i][cols[j]] * offset_numerators[j]
+            for j in range(parameters)
+        )
+        for i in range(samples)
+    ]
+
+    b = [
+        mp.mpf(v) / 10
+        for v in b_numerators
+    ]
 
     loss_limit = sigma ** 2 / 2
 
@@ -208,7 +232,7 @@ def train_with_sample_losses(
 
     diagnostics = []
     for i in range(samples):
-        informative = (b[i] != 0)
+        informative = (b_numerators[i] != 0)
 
         diagnostics.append({
             "seed": seed,
