@@ -1,0 +1,46 @@
+{
+  "experiment": "simple-root Newton lambda=-infinity boundary",
+  "functions": {
+    "poly_simple": {
+      "f": "(x-2)(x^2+1)",
+      "L": "2",
+      "paper_initial_point_rule": "4.0e9 +/- 4.0e7"
+    },
+    "exp_simple": {
+      "f": "exp(x-1)-1",
+      "L": "1",
+      "paper_initial_point_rule": "55 +/- 2"
+    }
+  },
+  "newton_convergence_order": 2,
+  "asymptotic_derivative": "U'(L)=0",
+  "lambda_inf": "-infinity",
+  "paper_cutoff": "1e-6",
+  "depth_definition": "latest(depth) = cutoff_crossing_index - 1 + depth",
+  "depths": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "windows": [
+    10,
+    20,
+    40,
+    50
+  ],
+  "paper_aligned_K_values": [
+    10,
+    20
+  ],
+  "replicates": 10,
+  "seed": 2026,
+  "precision_dps": 220,
+  "primary_evaluation": "validity, negative sign, and movement toward more-negative estimates as depth increases",
+  "finite_window_derivative_LE": "diagnostic only",
+  "no_absolute_error_to_lambda_inf": true,
+  "timing": "single-call elapsed seconds; not a controlled runtime benchmark",
+  "python": "3.12.2",
+  "numpy": "1.26.4",
+  "mpmath": "1.3.0"
+}
