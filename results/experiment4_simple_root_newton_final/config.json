@@ -1,0 +1,39 @@
+{
+  "experiment": "Experiment 4C final simple-root Newton boundary",
+  "lambda_inf": "-infinity",
+  "functions": {
+    "poly_simple": "(x-2)(x^2+1), L=2",
+    "exp_simple": "exp(x-1)-1, L=1"
+  },
+  "windows": [
+    2,
+    3,
+    5,
+    10,
+    20,
+    40,
+    50
+  ],
+  "window_roles": {
+    "2,3,5": "local asymptotic diagnostics",
+    "10": "transition",
+    "20,40,50": "nonlocal-window controls"
+  },
+  "depths": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "cutoff": "1e-6",
+  "replicates": 10,
+  "seed": 2026,
+  "dps": 800,
+  "primary_claim": "For genuinely local windows, the proposed estimate becomes increasingly negative as the Newton trajectory approaches a simple root with U'(L)=0.",
+  "oracle_L": "diagnostic only",
+  "independent_raw_recomputation": "diagnostic only; no clipping/floors/caps",
+  "baselines": "not rerun here; this is a proposed-estimator boundary/scope experiment"
+}

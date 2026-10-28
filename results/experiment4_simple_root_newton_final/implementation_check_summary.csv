@@ -1,0 +1,2 @@
+check,value,interpretation
+max_abs_official_minus_independent_raw_formula,5.82587969460145758130208592672152756460801728594914431405765378720764172165736530268523975e-800,Zero indicates no clipping/floor/cap was detected relative to the independently recomputed raw formula.
